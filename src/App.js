@@ -1,10 +1,38 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, LineChart, Line, AreaChart, Area, Legend, ReferenceLine
 } from "recharts";
+import { initializeApp } from "firebase/app";
+import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "firebase/firestore";
 
-// ── localStorage ──────────────────────────────────────────────────────────────
+// ── FIREBASE SETUP ────────────────────────────────────────────────────────────
+const firebaseConfig = {
+  apiKey: "AIzaSyALWmICBwxfn3ojliDCwvZy2MjBK5z85tU",
+  authDomain: "lifetime-tracker-dacff.firebaseapp.com",
+  projectId: "lifetime-tracker-dacff",
+  storageBucket: "lifetime-tracker-dacff.firebasestorage.app",
+  messagingSenderId: "909825898368",
+  appId: "1:909825898368:web:6a10b9b7d06e763d077365"
+};
+const firebaseApp = initializeApp(firebaseConfig);
+const db = getFirestore(firebaseApp);
+
+// ── CLOUD SYNC HELPERS ────────────────────────────────────────────────────────
+const saveToCloud = async (key, data) => {
+  try {
+    await setDoc(doc(db, "tracker", key), { data: JSON.stringify(data), updatedAt: new Date().toISOString() });
+  } catch (e) { console.log("Cloud save failed:", e); }
+};
+const loadFromCloud = async (key) => {
+  try {
+    const snap = await getDoc(doc(db, "tracker", key));
+    if (snap.exists()) return JSON.parse(snap.data().data);
+  } catch (e) { console.log("Cloud load failed:", e); }
+  return null;
+};
+
+// ── LOCAL STORAGE ─────────────────────────────────────────────────────────────
 const load = (key, fallback) => {
   try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
   catch { return fallback; }
@@ -23,6 +51,7 @@ const T = {
 // ── CONSTANTS ─────────────────────────────────────────────────────────────────
 const CATS = ["Fixed Deposit","Life Insurance","PPF","ELSS","NPS","Bonds","Gold","Real Estate","Other"];
 const PROPOSERS = ["Priyan Sheth","Suhani Sheth","Kepin Sheth","Bhagvatiben Sheth","Punjilal Sheth"];
+const CORRECT_PIN = load("app_pin", "1234");
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
 const inr = (n, short = false) => {
@@ -93,21 +122,158 @@ const Modal = ({ title, onClose, children }) => (
   </div>
 );
 
+// ── SYNC STATUS BADGE ─────────────────────────────────────────────────────────
+const SyncBadge = ({ status }) => {
+  const map = {
+    syncing: { color: T.gold, text: "⟳ Syncing..." },
+    synced:  { color: T.accent, text: "✓ Synced" },
+    error:   { color: T.red, text: "✕ Offline" },
+    idle:    { color: T.muted, text: "● Local" },
+  };
+  const s = map[status] || map.idle;
+  return <span style={{ fontSize: 10, color: s.color, fontWeight: 700 }}>{s.text}</span>;
+};
+
+// ── PIN LOCK SCREEN ───────────────────────────────────────────────────────────
+function PinLock({ onUnlock }) {
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState("");
+  const [shake, setShake] = useState(false);
+  const storedPin = load("app_pin", "1234");
+
+  const handleKey = (digit) => {
+    if (pin.length >= 4) return;
+    const newPin = pin + digit;
+    setPin(newPin);
+    if (newPin.length === 4) {
+      setTimeout(() => {
+        if (newPin === storedPin) {
+          onUnlock();
+        } else {
+          setShake(true);
+          setError("Wrong PIN. Try again.");
+          setPin("");
+          setTimeout(() => { setShake(false); setError(""); }, 1000);
+        }
+      }, 200);
+    }
+  };
+
+  const handleDelete = () => setPin(pin.slice(0, -1));
+
+  return (
+    <div style={{ background: T.bg, minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontFamily: "'Inter', system-ui, sans-serif" }}>
+      {/* Logo */}
+      <div style={{ marginBottom: 40, textAlign: "center" }}>
+        <div style={{ fontSize: 48, marginBottom: 12 }}>🏦</div>
+        <div style={{ fontSize: 9, color: T.muted, letterSpacing: 2, textTransform: "uppercase" }}>Sheth Family</div>
+        <div style={{ fontSize: 22, fontWeight: 900, background: `linear-gradient(90deg,${T.accent},${T.blue})`, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+          Investment Tracker
+        </div>
+      </div>
+
+      <div style={{ fontSize: 14, color: T.sub, marginBottom: 24, fontWeight: 600 }}>Enter PIN to continue</div>
+
+      {/* PIN dots */}
+      <div style={{ display: "flex", gap: 16, marginBottom: 16, animation: shake ? "shake 0.3s" : "none" }}>
+        {[0,1,2,3].map(i => (
+          <div key={i} style={{
+            width: 18, height: 18, borderRadius: "50%",
+            background: i < pin.length ? T.accent : "transparent",
+            border: `2px solid ${i < pin.length ? T.accent : T.border}`,
+            transition: "all 0.15s"
+          }} />
+        ))}
+      </div>
+
+      {error && <div style={{ color: T.red, fontSize: 12, marginBottom: 16, fontWeight: 600 }}>{error}</div>}
+
+      {/* Keypad */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 72px)", gap: 12, marginTop: 8 }}>
+        {[1,2,3,4,5,6,7,8,9,"",0,"⌫"].map((k, i) => (
+          <button key={i} onClick={() => k === "⌫" ? handleDelete() : k !== "" ? handleKey(String(k)) : null}
+            style={{
+              width: 72, height: 72, borderRadius: "50%",
+              background: k === "" ? "transparent" : k === "⌫" ? T.border : T.card,
+              border: k === "" ? "none" : `1px solid ${T.border}`,
+              color: T.text, fontSize: k === "⌫" ? 20 : 24, fontWeight: 700,
+              cursor: k === "" ? "default" : "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              transition: "all 0.1s"
+            }}>
+            {k}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 40, fontSize: 11, color: T.muted, textAlign: "center" }}>
+        Default PIN is <span style={{ color: T.accent, fontWeight: 700 }}>1234</span><br/>
+        Change it in Settings after login
+      </div>
+
+      <style>{`@keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-8px)} 75%{transform:translateX(8px)} }`}</style>
+    </div>
+  );
+}
+
+// ── useCloudData HOOK ─────────────────────────────────────────────────────────
+function useCloudData(key, defaultVal) {
+  const [data, setDataRaw] = useState(() => load(key, defaultVal));
+  const [syncStatus, setSyncStatus] = useState("idle");
+
+  // Load from cloud on mount
+  useEffect(() => {
+    setSyncStatus("syncing");
+    loadFromCloud(key).then(cloudData => {
+      if (cloudData !== null) {
+        setDataRaw(cloudData);
+        persist(key, cloudData);
+        setSyncStatus("synced");
+      } else {
+        setSyncStatus("idle");
+      }
+    });
+  }, [key]);
+
+  // Listen for real-time changes
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "tracker", key), (snap) => {
+      if (snap.exists()) {
+        try {
+          const cloudData = JSON.parse(snap.data().data);
+          setDataRaw(cloudData);
+          persist(key, cloudData);
+          setSyncStatus("synced");
+        } catch {}
+      }
+    }, () => setSyncStatus("error"));
+    return () => unsub();
+  }, [key]);
+
+  const setData = useCallback((val) => {
+    const next = typeof val === "function" ? val(data) : val;
+    setDataRaw(next);
+    persist(key, next);
+    setSyncStatus("syncing");
+    saveToCloud(key, next).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
+  }, [data, key]);
+
+  return [data, setData, syncStatus];
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SHEET 1 — INVESTMENTS
 // ─────────────────────────────────────────────────────────────────────────────
 const EMPTY_INV = { name: "", date: "", rate: "", maturityDate: "", invested: "", maturityAmt: "", proposer: PROPOSERS[0], nominee: "", category: CATS[0] };
 
 function InvestmentsSheet() {
-  const [list, setList] = useState(() => load("inv2", []));
+  const [list, setList, syncStatus] = useCloudData("inv2", []);
   const [form, setForm] = useState(EMPTY_INV);
   const [editId, setEditId] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [fp, setFp] = useState("All");
   const [fc, setFc] = useState("All");
   const [view, setView] = useState("table");
-
-  useEffect(() => { persist("inv2", list); }, [list]); // eslint-disable-line
 
   const enriched = useMemo(() => list.map(i => ({
     ...i,
@@ -165,14 +331,16 @@ function InvestmentsSheet() {
     setList(editId ? list.map(x => x.id === editId ? e : x) : [...list, e]);
     setShowForm(false);
   };
-
   const preview = form.invested && form.rate && form.date && form.maturityDate
     ? (form.maturityAmt > 0 ? +form.maturityAmt : compound(+form.invested, +form.rate, yrs(form.date, form.maturityDate)))
     : null;
 
   return (
     <div>
-      {/* KPIs */}
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+        <SyncBadge status={syncStatus} />
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 }}>
         <Card><Stat label="Invested" value={inr(totals.invested, true)} color={T.blue} /></Card>
         <Card><Stat label="Projected" value={inr(totals.projected, true)} color={T.accent} /></Card>
@@ -180,7 +348,6 @@ function InvestmentsSheet() {
           sub={totals.invested ? pct(((totals.projected - totals.invested) / totals.invested) * 100) : ""} /></Card>
       </div>
 
-      {/* Chart */}
       {yearlyData.length > 0 && (
         <Card style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>Year-wise Investment vs Projected</div>
@@ -198,7 +365,6 @@ function InvestmentsSheet() {
         </Card>
       )}
 
-      {/* Filters */}
       <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
         <select value={fp} onChange={e => setFp(e.target.value)} style={{ flex: 1, background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 10px", color: T.text, fontSize: 12 }}>
           <option value="All">All Proposers</option>
@@ -211,14 +377,12 @@ function InvestmentsSheet() {
         <Btn onClick={openAdd}>+ Add</Btn>
       </div>
 
-      {/* View Toggle */}
       <div style={{ display: "flex", gap: 4, marginBottom: 12 }}>
         {["table","proposer","category"].map(v => (
           <button key={v} onClick={() => setView(v)} style={{ background: view === v ? T.accent : T.border, color: view === v ? "#000" : T.sub, border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", textTransform: "capitalize" }}>{v}</button>
         ))}
       </div>
 
-      {/* TABLE */}
       {view === "table" && (
         list.length === 0
           ? <div style={{ textAlign: "center", color: T.muted, padding: 50, fontSize: 13 }}>No investments yet — tap + Add to start</div>
@@ -258,7 +422,6 @@ function InvestmentsSheet() {
             </div>
       )}
 
-      {/* PROPOSER */}
       {view === "proposer" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {Object.entries(byProposer).map(([name, d]) => (
@@ -284,7 +447,6 @@ function InvestmentsSheet() {
         </div>
       )}
 
-      {/* CATEGORY */}
       {view === "category" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {Object.entries(byCat).map(([cat, d]) => (
@@ -308,7 +470,6 @@ function InvestmentsSheet() {
         </div>
       )}
 
-      {/* MODAL */}
       {showForm && (
         <Modal title={editId ? "Edit Investment" : "New Investment"} onClose={() => setShowForm(false)}>
           <Field label="Investment Name" value={form.name} onChange={v => setForm({...form, name: v})} />
@@ -341,13 +502,11 @@ function InvestmentsSheet() {
 const EMPTY_EQ = { month: "", name: "", type: "Share", invested: "", units: "", latestValue: "" };
 
 function EquitySheet() {
-  const [list, setList] = useState(() => load("eq2", []));
+  const [list, setList, syncStatus] = useCloudData("eq2", []);
   const [form, setForm] = useState(EMPTY_EQ);
   const [editId, setEditId] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [filterName, setFilterName] = useState("All");
-
-  useEffect(() => { persist("eq2", list); }, [list]); // eslint-disable-line
 
   const names = useMemo(() => ["All", ...new Set(list.map(e => e.name))], [list]);
   const filtered = useMemo(() => filterName === "All" ? list : list.filter(e => e.name === filterName), [list, filterName]);
@@ -360,8 +519,7 @@ function EquitySheet() {
       m[e.month].value += +e.latestValue || 0;
     });
     return Object.values(m).sort((a, b) => a.month.localeCompare(b.month)).map(r => ({
-      ...r,
-      returnPct: r.invested > 0 ? ((r.value - r.invested) / r.invested) * 100 : 0,
+      ...r, returnPct: r.invested > 0 ? ((r.value - r.invested) / r.invested) * 100 : 0,
     }));
   }, [list]);
 
@@ -377,11 +535,13 @@ function EquitySheet() {
     setList(editId ? list.map(x => x.id === editId ? e : x) : [...list, e]);
     setShowForm(false);
   };
-
   const ret = totals.value - totals.invested;
 
   return (
     <div>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+        <SyncBadge status={syncStatus} />
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 }}>
         <Card><Stat label="Invested" value={inr(totals.invested, true)} color={T.blue} /></Card>
         <Card><Stat label="Current Value" value={inr(totals.value, true)} color={T.accent} /></Card>
@@ -397,10 +557,10 @@ function EquitySheet() {
               <AreaChart data={monthlyChart}>
                 <defs>
                   <linearGradient id="ag1" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={T.accent} stopOpacity={0.3} /><stop offset="95%" stopColor={T.accent} stopOpacity={0} />
+                    <stop offset="5%" stopColor={T.accent} stopOpacity={0.3}/><stop offset="95%" stopColor={T.accent} stopOpacity={0}/>
                   </linearGradient>
                   <linearGradient id="ag2" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={T.blue} stopOpacity={0.2} /><stop offset="95%" stopColor={T.blue} stopOpacity={0} />
+                    <stop offset="5%" stopColor={T.blue} stopOpacity={0.2}/><stop offset="95%" stopColor={T.blue} stopOpacity={0}/>
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke={T.border} vertical={false} />
@@ -412,7 +572,6 @@ function EquitySheet() {
               </AreaChart>
             </ResponsiveContainer>
           </Card>
-
           <Card style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>Return % by Month</div>
             <ResponsiveContainer width="100%" height={150}>
@@ -505,12 +664,10 @@ function EquitySheet() {
 const EMPTY_SAL = { month: "", salarySAR: "", expensesSAR: "", transferredSAR: "", convRate: "", otherIncome: "", notes: "" };
 
 function SalarySheet() {
-  const [list, setList] = useState(() => load("sal2", []));
+  const [list, setList, syncStatus] = useCloudData("sal2", []);
   const [form, setForm] = useState(EMPTY_SAL);
   const [editId, setEditId] = useState(null);
   const [showForm, setShowForm] = useState(false);
-
-  useEffect(() => { persist("sal2", list); }, [list]); // eslint-disable-line
 
   const enriched = useMemo(() => [...list].sort((a,b) => a.month.localeCompare(b.month)).map(r => ({
     ...r,
@@ -538,6 +695,9 @@ function SalarySheet() {
 
   return (
     <div>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+        <SyncBadge status={syncStatus} />
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
         <Card><Stat label="Avg Salary/mo" value={`SAR ${Math.round(avg.salary).toLocaleString()}`} color={T.blue} /></Card>
         <Card><Stat label="Avg Transfer/mo" value={inr(Math.round(avg.transferredINR), true)} color={T.accent} /></Card>
@@ -563,7 +723,6 @@ function SalarySheet() {
               </BarChart>
             </ResponsiveContainer>
           </Card>
-
           <Card style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>INR Transferred to India</div>
             <ResponsiveContainer width="100%" height={150}>
@@ -581,7 +740,6 @@ function SalarySheet() {
               </AreaChart>
             </ResponsiveContainer>
           </Card>
-
           <Card style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>SAR → INR Rate Trend</div>
             <ResponsiveContainer width="100%" height={130}>
@@ -674,106 +832,101 @@ function SalarySheet() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SETTINGS SHEET
+// ─────────────────────────────────────────────────────────────────────────────
+function SettingsSheet({ onLock }) {
+  const [oldPin, setOldPin] = useState("");
+  const [newPin, setNewPin] = useState("");
+  const [confirmPin, setConfirmPin] = useState("");
+  const [msg, setMsg] = useState("");
+
+  const changePin = () => {
+    const stored = load("app_pin", "1234");
+    if (oldPin !== stored) { setMsg("❌ Current PIN is incorrect"); return; }
+    if (newPin.length !== 4 || isNaN(newPin)) { setMsg("❌ New PIN must be 4 digits"); return; }
+    if (newPin !== confirmPin) { setMsg("❌ PINs do not match"); return; }
+    persist("app_pin", newPin);
+    setMsg("✅ PIN changed successfully!");
+    setOldPin(""); setNewPin(""); setConfirmPin("");
+    setTimeout(() => setMsg(""), 3000);
+  };
+
+  return (
+    <div>
+      <Card style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 16 }}>🔐 Change PIN</div>
+        <Field label="Current PIN" type="password" value={oldPin} onChange={setOldPin} />
+        <Field label="New PIN (4 digits)" type="password" value={newPin} onChange={setNewPin} />
+        <Field label="Confirm New PIN" type="password" value={confirmPin} onChange={setConfirmPin} />
+        {msg && <div style={{ background: msg.startsWith("✅") ? T.accentDim : T.red+"22", border: `1px solid ${msg.startsWith("✅") ? T.accent : T.red}44`, borderRadius: 10, padding: 10, fontSize: 12, fontWeight: 700, color: msg.startsWith("✅") ? T.accent : T.red, marginBottom: 12 }}>{msg}</div>}
+        <Btn onClick={changePin} style={{ width: "100%", padding: 12 }}>Change PIN</Btn>
+      </Card>
+
+      <Card style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 8 }}>☁️ Cloud Sync</div>
+        <div style={{ fontSize: 12, color: T.sub, marginBottom: 4 }}>Your data syncs automatically to Firebase.</div>
+        <div style={{ fontSize: 12, color: T.sub }}>Same data appears on all your devices instantly.</div>
+        <div style={{ marginTop: 12, background: T.accentDim, borderRadius: 10, padding: 10, fontSize: 12, color: T.accent, fontWeight: 600 }}>✓ Connected to Firebase · Sheth Family Tracker</div>
+      </Card>
+
+      <Card>
+        <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 8 }}>🔒 Lock App</div>
+        <div style={{ fontSize: 12, color: T.sub, marginBottom: 12 }}>Lock the app and return to PIN screen.</div>
+        <Btn onClick={onLock} v="danger" style={{ width: "100%", padding: 12 }}>Lock Now</Btn>
+      </Card>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ROOT APP
 // ─────────────────────────────────────────────────────────────────────────────
 export default function App() {
+  const [unlocked, setUnlocked] = useState(false);
   const [sheet, setSheet] = useState(0);
-  const [showBackup, setShowBackup] = useState(false);
-  const [msg, setMsg] = useState("");
 
   const SHEETS = [
     { label: "Investments", icon: "🏦" },
     { label: "Equity & MF", icon: "📈" },
     { label: "Salary & FX", icon: "💱" },
+    { label: "Settings", icon: "⚙️" },
   ];
 
-  const handleExport = () => {
-    const data = { exportedAt: new Date().toISOString(), inv2: load("inv2",[]), eq2: load("eq2",[]), sal2: load("sal2",[]) };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = `backup-${new Date().toISOString().slice(0,10)}.json`; a.click();
-    URL.revokeObjectURL(url);
-    setMsg("✅ Backup downloaded!"); setTimeout(() => setMsg(""), 3000);
-  };
-
-  const handleImport = e => {
-    const file = e.target.files[0]; if (!file) return;
-    const reader = new FileReader();
-    reader.onload = ev => {
-      try {
-        const data = JSON.parse(ev.target.result);
-        if (data.inv2) persist("inv2", data.inv2);
-        if (data.eq2) persist("eq2", data.eq2);
-        if (data.sal2) persist("sal2", data.sal2);
-        setMsg("✅ Restored! Reloading..."); setTimeout(() => window.location.reload(), 1500);
-      } catch { setMsg("❌ Invalid file."); setTimeout(() => setMsg(""), 3000); }
-    };
-    reader.readAsText(file);
-  };
+  if (!unlocked) return <PinLock onUnlock={() => setUnlocked(true)} />;
 
   return (
     <div style={{ background: T.bg, minHeight: "100vh", color: T.text, fontFamily: "'Inter', system-ui, sans-serif" }}>
-      {/* Header */}
       <div style={{ background: T.surface, borderBottom: `1px solid ${T.border}`, padding: "14px 18px", position: "sticky", top: 0, zIndex: 200 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <div style={{ fontSize: 9, color: T.muted, letterSpacing: 2, textTransform: "uppercase" }}>Sheth Family</div>
             <div style={{ fontSize: 18, fontWeight: 900, background: `linear-gradient(90deg,${T.accent},${T.blue})`, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
-              Lifetime Investment Tracker
+              Investment Tracker
             </div>
           </div>
-          <button onClick={() => setShowBackup(true)} title="Backup & Restore"
-            style={{ background: T.border, border: "none", borderRadius: 10, padding: "8px 12px", fontSize: 18, cursor: "pointer" }}>🗄️</button>
+          <div style={{ fontSize: 10, color: T.accent, fontWeight: 700 }}>☁️ Cloud Sync ON</div>
         </div>
       </div>
 
-      {/* Tabs */}
-      <div style={{ display: "flex", background: T.surface, borderBottom: `1px solid ${T.border}`, padding: "0 12px" }}>
+      <div style={{ display: "flex", background: T.surface, borderBottom: `1px solid ${T.border}`, padding: "0 8px" }}>
         {SHEETS.map((s, i) => (
           <button key={i} onClick={() => setSheet(i)} style={{
-            flex: 1, padding: "12px 4px", background: "none", border: "none",
+            flex: 1, padding: "10px 2px", background: "none", border: "none",
             borderBottom: sheet === i ? `2px solid ${T.accent}` : "2px solid transparent",
-            color: sheet === i ? T.accent : T.muted, fontWeight: 700, fontSize: 11,
+            color: sheet === i ? T.accent : T.muted, fontWeight: 700, fontSize: 10,
             cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 2
           }}>
-            <span style={{ fontSize: 16 }}>{s.icon}</span>{s.label}
+            <span style={{ fontSize: 14 }}>{s.icon}</span>{s.label}
           </button>
         ))}
       </div>
 
-      {/* Content */}
       <div style={{ padding: "16px 14px 80px" }}>
         {sheet === 0 && <InvestmentsSheet />}
         {sheet === 1 && <EquitySheet />}
         {sheet === 2 && <SalarySheet />}
+        {sheet === 3 && <SettingsSheet onLock={() => setUnlocked(false)} />}
       </div>
-
-      {/* Backup Modal */}
-      {showBackup && (
-        <div style={{ position: "fixed", inset: 0, background: "#00000099", zIndex: 300, display: "flex", alignItems: "flex-end" }}>
-          <div style={{ background: T.card, borderRadius: "18px 18px 0 0", padding: 24, width: "100%", boxSizing: "border-box" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-              <div style={{ fontSize: 16, fontWeight: 800 }}>🗄️ Backup & Restore</div>
-              <button onClick={() => { setShowBackup(false); setMsg(""); }} style={{ background: "none", border: "none", color: T.muted, fontSize: 20, cursor: "pointer" }}>✕</button>
-            </div>
-            <div style={{ background: T.surface, borderRadius: 12, padding: 16, marginBottom: 12, border: `1px solid ${T.border}` }}>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>📥 Export Backup</div>
-              <div style={{ fontSize: 12, color: T.sub, marginBottom: 12 }}>Download all your data as a JSON file</div>
-              <button onClick={handleExport} style={{ width: "100%", background: T.accent, color: "#000", border: "none", borderRadius: 10, padding: 12, fontWeight: 800, fontSize: 14, cursor: "pointer" }}>Download Backup</button>
-            </div>
-            <div style={{ background: T.surface, borderRadius: 12, padding: 16, border: `1px solid ${T.border}` }}>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>📤 Restore Backup</div>
-              <div style={{ fontSize: 12, color: T.sub, marginBottom: 12 }}>Select a previously downloaded backup file</div>
-              <label style={{ display: "block", width: "100%", background: T.border, color: T.text, borderRadius: 10, padding: 12, fontWeight: 800, fontSize: 14, cursor: "pointer", textAlign: "center", boxSizing: "border-box" }}>
-                Select File <input type="file" accept=".json" onChange={handleImport} style={{ display: "none" }} />
-              </label>
-            </div>
-            {msg && <div style={{ marginTop: 14, background: msg.startsWith("✅") ? T.accentDim : T.red+"22", border: `1px solid ${msg.startsWith("✅") ? T.accent : T.red}44`, borderRadius: 10, padding: 12, fontSize: 13, fontWeight: 700, color: msg.startsWith("✅") ? T.accent : T.red, textAlign: "center" }}>{msg}</div>}
-            <div style={{ marginTop: 14, fontSize: 11, color: T.muted, textAlign: "center" }}>💡 Export monthly and save to Google Drive</div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
