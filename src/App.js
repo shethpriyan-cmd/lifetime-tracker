@@ -35,8 +35,10 @@ const loadFromCloud = async (key) => {
 // ── PIN-SPECIFIC CLOUD HELPERS ────────────────────────────────────────────────
 // PIN is stored separately as a plain field to avoid JSON double-encoding issues
 const savePinToCloud = async (pin) => {
+  // Store PIN as plain string field — no JSON encoding
   try {
-    await setDoc(doc(db, "tracker", "app_pin"), { pin: pin, updatedAt: new Date().toISOString() });
+    await setDoc(doc(db, "tracker", "app_pin"), { pin: String(pin), updatedAt: new Date().toISOString() });
+    console.log("PIN saved to cloud:", pin);
   } catch (e) { console.log("PIN cloud save failed:", e); }
 };
 const loadPinFromCloud = async () => {
@@ -44,11 +46,16 @@ const loadPinFromCloud = async () => {
     const snap = await getDoc(doc(db, "tracker", "app_pin"));
     if (snap.exists()) {
       const d = snap.data();
-      // Support both old format (data field) and new format (pin field)
-      if (d.pin && typeof d.pin === "string" && d.pin.length === 4) return d.pin;
+      // Try plain pin field first (new format)
+      if (d.pin && typeof d.pin === "string") {
+        const p = d.pin.replace(/^"|"$/g, ""); // strip quotes if any
+        if (p.length === 4) { console.log("PIN loaded from cloud:", p); return p; }
+      }
+      // Try data field (old format) — strip double encoding
       if (d.data) {
         try {
-          const parsed = JSON.parse(d.data);
+          let parsed = JSON.parse(d.data);
+          if (typeof parsed === "string") parsed = parsed.replace(/^"|"$/g, "");
           if (typeof parsed === "string" && parsed.length === 4) return parsed;
         } catch {}
       }
@@ -64,6 +71,19 @@ const load = (key, fallback) => {
 };
 const persist = (key, val) => {
   try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+};
+// PIN-specific local storage — stores as plain string, no JSON wrapping
+const loadPin = () => {
+  try {
+    const v = localStorage.getItem("app_pin");
+    if (!v) return "1234";
+    // Handle both plain string and JSON-encoded string
+    const cleaned = v.replace(/^"|"$/g, ""); // remove surrounding quotes if any
+    return cleaned.length === 4 ? cleaned : "1234";
+  } catch { return "1234"; }
+};
+const savePin = (pin) => {
+  try { localStorage.setItem("app_pin", pin); } catch {} // store plain, no JSON
 };
 
 // ── THEME ─────────────────────────────────────────────────────────────────────
@@ -164,7 +184,7 @@ function PinLock({ onUnlock }) {
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const [shake, setShake] = useState(false);
-  const [storedPin, setStoredPin] = useState(load("app_pin", "1234"));
+  const [storedPin, setStoredPin] = useState(loadPin());
   const [pinReady, setPinReady] = useState(false);
 
   // Always load PIN from Firebase first — ensures PIN change syncs across all devices
@@ -173,7 +193,7 @@ function PinLock({ onUnlock }) {
     loadPinFromCloud().then(cloudPin => {
       if (cloudPin) {
         setStoredPin(cloudPin);
-        persist("app_pin", cloudPin);
+        savePin(cloudPin); // save as plain string
       }
       setPinReady(true);
     }).catch(() => {
@@ -897,14 +917,14 @@ function SettingsSheet({ onLock }) {
   const changePin = async () => {
     // Always verify against cloud PIN first
     const cloudPin = await loadPinFromCloud();
-    const localPin = load("app_pin", "1234");
+    const localPin = loadPin();
     const currentPin = cloudPin || localPin;
     if (oldPin !== currentPin) { setMsg("❌ Current PIN is incorrect"); return; }
     if (newPin.length !== 4 || isNaN(Number(newPin))) { setMsg("❌ New PIN must be exactly 4 digits"); return; }
     if (newPin !== confirmPin) { setMsg("❌ PINs do not match"); return; }
-    // Save to Firebase with dedicated PIN function, then localStorage
+    // Save plain string to Firebase and localStorage
     await savePinToCloud(newPin);
-    persist("app_pin", newPin);
+    savePin(newPin);
     setMsg("✅ PIN changed on all devices!");
     setOldPin(""); setNewPin(""); setConfirmPin("");
     setTimeout(() => setMsg(""), 3000);
