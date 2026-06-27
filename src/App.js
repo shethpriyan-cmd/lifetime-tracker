@@ -139,7 +139,17 @@ function PinLock({ onUnlock }) {
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const [shake, setShake] = useState(false);
-  const storedPin = load("app_pin", "1234");
+  const [storedPin, setStoredPin] = useState(load("app_pin", "1234"));
+
+  // Load PIN from Firebase so PIN change syncs across all devices
+  useEffect(() => {
+    loadFromCloud("app_pin").then(cloudPin => {
+      if (cloudPin && typeof cloudPin === "string" && cloudPin.length === 4) {
+        setStoredPin(cloudPin);
+        persist("app_pin", cloudPin);
+      }
+    });
+  }, []); // eslint-disable-line
 
   const handleKey = (digit) => {
     if (pin.length >= 4) return;
@@ -264,7 +274,7 @@ function useCloudData(key, defaultVal) {
 // ─────────────────────────────────────────────────────────────────────────────
 // SHEET 1 — INVESTMENTS
 // ─────────────────────────────────────────────────────────────────────────────
-const EMPTY_INV = { name: "", date: "", rate: "", maturityDate: "", invested: "", maturityAmt: "", proposer: PROPOSERS[0], nominee: "", category: CATS[0] };
+const EMPTY_INV = { name: "", accountNo: "", date: "", rate: "", maturityDate: "", invested: "", maturityAmt: "", proposer: PROPOSERS[0], nominee: "", category: CATS[0] };
 
 function InvestmentsSheet() {
   const [list, setList, syncStatus] = useCloudData("inv2", []);
@@ -390,7 +400,7 @@ function InvestmentsSheet() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ borderBottom: `1px solid ${T.border}` }}>
-                    {["Name","Proposer","Category","Invested","Rate","Maturity","Projected","Nominee",""].map(h => (
+                    {["Name","A/C No","Proposer","Category","Invested","Rate","Maturity","Projected","Nominee",""].map(h => (
                       <th key={h} style={{ textAlign: "left", padding: "8px 6px", color: T.muted, fontWeight: 600, fontSize: 10, whiteSpace: "nowrap" }}>{h}</th>
                     ))}
                   </tr>
@@ -402,6 +412,7 @@ function InvestmentsSheet() {
                         <div style={{ color: T.text, fontWeight: 600 }}>{i.name}</div>
                         <div style={{ color: T.muted, fontSize: 10 }}>{i.fy}{i.matured ? " · MATURED" : ""}</div>
                       </td>
+                      <td style={{ padding: "9px 6px", color: T.sub, fontSize: 11 }}>{i.accountNo || "—"}</td>
                       <td style={{ padding: "9px 6px", color: T.sub, whiteSpace: "nowrap" }}>{(i.proposer||"").split(" ")[0]}</td>
                       <td style={{ padding: "9px 6px" }}><span style={{ background: T.accentDim, color: T.accent, borderRadius: 6, padding: "2px 7px", fontSize: 10 }}>{i.category}</span></td>
                       <td style={{ padding: "9px 6px", color: T.blue, fontWeight: 700 }}>{inr(i.invested, true)}</td>
@@ -472,7 +483,10 @@ function InvestmentsSheet() {
 
       {showForm && (
         <Modal title={editId ? "Edit Investment" : "New Investment"} onClose={() => setShowForm(false)}>
-          <Field label="Investment Name" value={form.name} onChange={v => setForm({...form, name: v})} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Field label="Investment Name" value={form.name} onChange={v => setForm({...form, name: v})} />
+            <Field label="Account Number" value={form.accountNo} onChange={v => setForm({...form, accountNo: v})} />
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <Field label="Date of Investment" type="date" value={form.date} onChange={v => setForm({...form, date: v})} />
             <Field label="Maturity Date" type="date" value={form.maturityDate} onChange={v => setForm({...form, maturityDate: v})} />
@@ -840,13 +854,15 @@ function SettingsSheet({ onLock }) {
   const [confirmPin, setConfirmPin] = useState("");
   const [msg, setMsg] = useState("");
 
-  const changePin = () => {
+  const changePin = async () => {
     const stored = load("app_pin", "1234");
     if (oldPin !== stored) { setMsg("❌ Current PIN is incorrect"); return; }
     if (newPin.length !== 4 || isNaN(newPin)) { setMsg("❌ New PIN must be 4 digits"); return; }
     if (newPin !== confirmPin) { setMsg("❌ PINs do not match"); return; }
+    // Save to both localStorage AND Firebase cloud
     persist("app_pin", newPin);
-    setMsg("✅ PIN changed successfully!");
+    await saveToCloud("app_pin", newPin);
+    setMsg("✅ PIN changed on all devices!");
     setOldPin(""); setNewPin(""); setConfirmPin("");
     setTimeout(() => setMsg(""), 3000);
   };
@@ -878,6 +894,212 @@ function SettingsSheet({ onLock }) {
   );
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHEET 4 — MONTHLY SIPs
+// ─────────────────────────────────────────────────────────────────────────────
+const SIP_INTERVALS = ["Monthly","Weekly","Quarterly","Yearly"];
+const EMPTY_SIP = { name: "", sipAmt: "", lumpsumAmt: "", interval: "Monthly", date: "", sipWith: "", proposer: PROPOSERS[0], remarks: "" };
+
+function SIPSheet() {
+  const [list, setList, syncStatus] = useCloudData("sip2", []);
+  const [form, setForm] = useState(EMPTY_SIP);
+  const [editId, setEditId] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [filterProposer, setFilterProposer] = useState("All");
+
+  const filtered = useMemo(() =>
+    filterProposer === "All" ? list : list.filter(s => s.proposer === filterProposer),
+    [list, filterProposer]);
+
+  // Monthly chart data — aggregate SIP + lumpsum by month
+  const monthlyChart = useMemo(() => {
+    const m = {};
+    list.forEach(s => {
+      const mo = s.date ? s.date.slice(0, 7) : "Unknown";
+      if (!m[mo]) m[mo] = { month: mo, sip: 0, lumpsum: 0, total: 0 };
+      m[mo].sip += +s.sipAmt || 0;
+      m[mo].lumpsum += +s.lumpsumAmt || 0;
+      m[mo].total += (+s.sipAmt || 0) + (+s.lumpsumAmt || 0);
+    });
+    return Object.values(m).sort((a, b) => a.month.localeCompare(b.month));
+  }, [list]);
+
+  // By proposer summary
+  const byProposer = useMemo(() => {
+    const m = {};
+    list.forEach(s => {
+      if (!m[s.proposer]) m[s.proposer] = { sip: 0, lumpsum: 0, count: 0 };
+      m[s.proposer].sip += +s.sipAmt || 0;
+      m[s.proposer].lumpsum += +s.lumpsumAmt || 0;
+      m[s.proposer].count++;
+    });
+    return m;
+  }, [list]);
+
+  const totals = useMemo(() => ({
+    sip: filtered.reduce((s, x) => s + (+x.sipAmt || 0), 0),
+    lumpsum: filtered.reduce((s, x) => s + (+x.lumpsumAmt || 0), 0),
+  }), [filtered]);
+
+  const openAdd = () => { setEditId(null); setForm(EMPTY_SIP); setShowForm(true); };
+  const openEdit = s => { setEditId(s.id); setForm({ ...s }); setShowForm(true); };
+  const save = () => {
+    const e = { ...form, id: editId || Date.now(), sipAmt: +form.sipAmt, lumpsumAmt: +form.lumpsumAmt };
+    setList(editId ? list.map(x => x.id === editId ? e : x) : [...list, e]);
+    setShowForm(false);
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+        <SyncBadge status={syncStatus} />
+      </div>
+
+      {/* KPIs */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 }}>
+        <Card><Stat label="Total SIP/mo" value={inr(totals.sip, true)} color={T.accent} /></Card>
+        <Card><Stat label="Total Lumpsum" value={inr(totals.lumpsum, true)} color={T.blue} /></Card>
+        <Card><Stat label="Total Invested" value={inr(totals.sip + totals.lumpsum, true)} color={T.gold} sub={`${filtered.length} SIPs`} /></Card>
+      </div>
+
+      {/* Monthwise SIP Bar Chart */}
+      {monthlyChart.length > 0 && (
+        <>
+          <Card style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Monthwise SIP Investment</div>
+            <div style={{ fontSize: 10, color: T.muted, marginBottom: 12 }}>SIP amount + Lumpsum per month</div>
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={monthlyChart} barGap={2}>
+                <CartesianGrid strokeDasharray="3 3" stroke={T.border} vertical={false} />
+                <XAxis dataKey="month" tick={{ fill: T.sub, fontSize: 9 }} axisLine={false} tickLine={false} />
+                <YAxis tickFormatter={v => inr(v, true)} tick={{ fill: T.sub, fontSize: 10 }} axisLine={false} tickLine={false} />
+                <TT formatter={(v, n) => [inr(v), n === "sip" ? "SIP" : n === "lumpsum" ? "Lumpsum" : "Total"]} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Bar dataKey="sip" name="SIP" fill={T.accent} radius={[3,3,0,0]} stackId="a" />
+                <Bar dataKey="lumpsum" name="Lumpsum" fill={T.blue} radius={[3,3,0,0]} stackId="a" />
+              </BarChart>
+            </ResponsiveContainer>
+          </Card>
+
+          <Card style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>Cumulative SIP Growth</div>
+            <ResponsiveContainer width="100%" height={160}>
+              <AreaChart data={monthlyChart.reduce((acc, m, i) => {
+                const prev = acc[i - 1]?.cumulative || 0;
+                return [...acc, { ...m, cumulative: prev + m.total }];
+              }, [])}>
+                <defs>
+                  <linearGradient id="sipg" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={T.accent} stopOpacity={0.3}/><stop offset="95%" stopColor={T.accent} stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke={T.border} vertical={false} />
+                <XAxis dataKey="month" tick={{ fill: T.sub, fontSize: 9 }} axisLine={false} tickLine={false} />
+                <YAxis tickFormatter={v => inr(v, true)} tick={{ fill: T.sub, fontSize: 10 }} axisLine={false} tickLine={false} />
+                <TT formatter={v => [inr(v), "Cumulative"]} />
+                <Area type="monotone" dataKey="cumulative" stroke={T.accent} fill="url(#sipg)" strokeWidth={2} name="Cumulative" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </Card>
+        </>
+      )}
+
+      {/* Proposer Summary */}
+      {Object.keys(byProposer).length > 0 && (
+        <Card style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>By Proposer</div>
+          {Object.entries(byProposer).map(([name, d]) => (
+            <div key={name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${T.border}` }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{name}</div>
+                <div style={{ fontSize: 10, color: T.muted }}>{d.count} SIPs</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: T.accent }}>{inr(d.sip, true)} SIP</div>
+                <div style={{ fontSize: 10, color: T.blue }}>{inr(d.lumpsum, true)} Lumpsum</div>
+              </div>
+            </div>
+          ))}
+        </Card>
+      )}
+
+      {/* Filter + Add */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <select value={filterProposer} onChange={e => setFilterProposer(e.target.value)}
+          style={{ flex: 1, background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 10px", color: T.text, fontSize: 12 }}>
+          <option value="All">All Proposers</option>
+          {PROPOSERS.map(p => <option key={p}>{p}</option>)}
+        </select>
+        <Btn onClick={openAdd}>+ Add SIP</Btn>
+      </div>
+
+      {/* Table */}
+      {list.length === 0
+        ? <div style={{ textAlign: "center", color: T.muted, padding: 50 }}>No SIPs yet — tap + Add SIP</div>
+        : <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                  {["Name","SIP With","Proposer","SIP Amt","Lumpsum","Interval","Date","Remarks",""].map(h => (
+                    <th key={h} style={{ textAlign: "left", padding: "8px 6px", color: T.muted, fontWeight: 600, fontSize: 9, whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(s => (
+                  <tr key={s.id} style={{ borderBottom: `1px solid ${T.border}22` }}>
+                    <td style={{ padding: "9px 6px", color: T.text, fontWeight: 600 }}>{s.name}</td>
+                    <td style={{ padding: "9px 6px", color: T.sub }}>{s.sipWith || "—"}</td>
+                    <td style={{ padding: "9px 6px", color: T.sub }}>{(s.proposer||"").split(" ")[0]}</td>
+                    <td style={{ padding: "9px 6px", color: T.accent, fontWeight: 700 }}>{inr(s.sipAmt, true)}</td>
+                    <td style={{ padding: "9px 6px", color: T.blue }}>{s.lumpsumAmt > 0 ? inr(s.lumpsumAmt, true) : "—"}</td>
+                    <td style={{ padding: "9px 6px" }}>
+                      <span style={{ background: T.accentDim, color: T.accent, borderRadius: 6, padding: "2px 7px", fontSize: 10 }}>{s.interval}</span>
+                    </td>
+                    <td style={{ padding: "9px 6px", color: T.sub, whiteSpace: "nowrap" }}>{s.date || "—"}</td>
+                    <td style={{ padding: "9px 6px", color: T.muted, fontSize: 10 }}>{s.remarks || "—"}</td>
+                    <td style={{ padding: "9px 6px" }}>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <Btn onClick={() => openEdit(s)} v="ghost" style={{ padding: "3px 8px" }}>✎</Btn>
+                        <Btn onClick={() => setList(list.filter(x => x.id !== s.id))} v="danger" style={{ padding: "3px 8px" }}>✕</Btn>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+      }
+
+      {/* Modal */}
+      {showForm && (
+        <Modal title={editId ? "Edit SIP" : "Add SIP"} onClose={() => setShowForm(false)}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Field label="SIP / Fund Name" value={form.name} onChange={v => setForm({...form, name: v})} />
+            <Field label="SIP With (Bank/AMC)" value={form.sipWith} onChange={v => setForm({...form, sipWith: v})} />
+            <Field label="SIP Amount (₹)" type="number" value={form.sipAmt} onChange={v => setForm({...form, sipAmt: v})} />
+            <Field label="Lumpsum Amount (₹)" type="number" value={form.lumpsumAmt} onChange={v => setForm({...form, lumpsumAmt: v})} />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Field label="SIP Interval" value={form.interval} onChange={v => setForm({...form, interval: v})} opts={SIP_INTERVALS} />
+            <Field label="Date of SIP" type="date" value={form.date} onChange={v => setForm({...form, date: v})} />
+          </div>
+          <Field label="Proposer" value={form.proposer} onChange={v => setForm({...form, proposer: v})} opts={PROPOSERS} />
+          <Field label="Remarks" value={form.remarks} onChange={v => setForm({...form, remarks: v})} />
+          {(form.sipAmt > 0 || form.lumpsumAmt > 0) && (
+            <div style={{ background: T.accentDim, border: `1px solid ${T.accent}33`, borderRadius: 10, padding: 12, marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: T.accent }}>Total Investment</div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: T.accent }}>{inr((+form.sipAmt || 0) + (+form.lumpsumAmt || 0))}</div>
+            </div>
+          )}
+          <Btn onClick={save} style={{ width: "100%", padding: 13, fontSize: 14 }}>{editId ? "Save Changes" : "Add SIP"}</Btn>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ROOT APP
 // ─────────────────────────────────────────────────────────────────────────────
@@ -888,6 +1110,7 @@ export default function App() {
   const SHEETS = [
     { label: "Investments", icon: "🏦" },
     { label: "Equity & MF", icon: "📈" },
+    { label: "SIPs", icon: "🔄" },
     { label: "Salary & FX", icon: "💱" },
     { label: "Settings", icon: "⚙️" },
   ];
@@ -924,8 +1147,9 @@ export default function App() {
       <div style={{ padding: "16px 14px 80px" }}>
         {sheet === 0 && <InvestmentsSheet />}
         {sheet === 1 && <EquitySheet />}
-        {sheet === 2 && <SalarySheet />}
-        {sheet === 3 && <SettingsSheet onLock={() => setUnlocked(false)} />}
+        {sheet === 2 && <SIPSheet />}
+        {sheet === 3 && <SalarySheet />}
+        {sheet === 4 && <SettingsSheet onLock={() => setUnlocked(false)} />}
       </div>
     </div>
   );
