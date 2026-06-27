@@ -555,6 +555,16 @@ function InvestmentsSheet() {
   const [fp, setFp] = useState("All");
   const [fc, setFc] = useState("All");
   const [view, setView] = useState("table");
+  const [sortKey, setSortKey] = useState("date");
+  const [sortDir, setSortDir] = useState("desc");
+  const [nameSearch, setNameSearch] = useState("");
+
+  const handleSort = (key) => {
+    if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortKey(key); setSortDir("asc"); }
+  };
+
+  const sortArrow = (key) => sortKey === key ? (sortDir === "asc" ? " ▲" : " ▼") : " ⇅";
 
   const enriched = useMemo(() => list.map(i => ({
     ...i,
@@ -563,9 +573,21 @@ function InvestmentsSheet() {
     fy: fyLabel(i.date),
   })), [list]);
 
-  const filtered = useMemo(() =>
-    enriched.filter(i => (fp === "All" || i.proposer === fp) && (fc === "All" || i.category === fc)),
-    [enriched, fp, fc]);
+  const filtered = useMemo(() => {
+    const f = enriched.filter(i =>
+      (fp === "All" || i.proposer === fp) &&
+      (fc === "All" || i.category === fc) &&
+      (nameSearch === "" || (i.name||"").toLowerCase().includes(nameSearch.toLowerCase()) || (i.accountNo||"").toLowerCase().includes(nameSearch.toLowerCase()))
+    );
+    return [...f].sort((a, b) => {
+      let av = a[sortKey], bv = b[sortKey];
+      if (sortKey === "invested" || sortKey === "projected" || sortKey === "rate") { av = +av || 0; bv = +bv || 0; }
+      else { av = String(av || ""); bv = String(bv || ""); }
+      if (av < bv) return sortDir === "asc" ? -1 : 1;
+      if (av > bv) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+  }, [enriched, fp, fc, sortKey, sortDir]);
 
   const totals = useMemo(() => ({
     invested: filtered.reduce((s, i) => s + (+i.invested || 0), 0),
@@ -670,10 +692,47 @@ function InvestmentsSheet() {
           : <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
-                  <tr style={{ borderBottom: `1px solid ${T.border}` }}>
-                    {["Name","A/C No","Proposer","Category","Invested","Rate","Maturity","Projected","Nominee",""].map(h => (
-                      <th key={h} style={{ textAlign: "left", padding: "8px 6px", color: T.muted, fontWeight: 600, fontSize: 10, whiteSpace: "nowrap" }}>{h}</th>
+                  <tr style={{ borderBottom: `2px solid ${T.border}` }}>
+                    {[
+                      { label: "Name", key: "name" },
+                      { label: "A/C No", key: "accountNo" },
+                      { label: "Proposer", key: "proposer" },
+                      { label: "Category", key: "category" },
+                      { label: "Invested", key: "invested" },
+                      { label: "Rate", key: "rate" },
+                      { label: "Maturity Date", key: "maturityDate" },
+                      { label: "Projected", key: "projected" },
+                      { label: "Nominee", key: "nominee" },
+                      { label: "", key: null },
+                    ].map(h => (
+                      <th key={h.label} onClick={() => h.key && handleSort(h.key)}
+                        style={{ textAlign: "left", padding: "8px 6px", color: sortKey === h.key ? T.accent : T.muted, fontWeight: 700, fontSize: 10, whiteSpace: "nowrap", cursor: h.key ? "pointer" : "default", userSelect: "none" }}>
+                        {h.label}{h.key ? sortArrow(h.key) : ""}
+                      </th>
                     ))}
+                  </tr>
+                  {/* Filter row */}
+                  <tr style={{ background: T.surface }}>
+                    <td colSpan={2} style={{ padding: "4px 6px" }}>
+                      <input placeholder="Search name..." value={nameSearch}
+                        onChange={e => setNameSearch(e.target.value)}
+                        style={{ width: "100%", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 6, padding: "4px 8px", color: T.text, fontSize: 10, boxSizing: "border-box" }} />
+                    </td>
+                    <td style={{ padding: "4px 6px" }}>
+                      <select value={fp} onChange={e => setFp(e.target.value)}
+                        style={{ width: "100%", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 6, padding: "4px 6px", color: T.text, fontSize: 10 }}>
+                        <option value="All">All</option>
+                        {PROPOSERS.map(p => <option key={p}>{p}</option>)}
+                      </select>
+                    </td>
+                    <td style={{ padding: "4px 6px" }}>
+                      <select value={fc} onChange={e => setFc(e.target.value)}
+                        style={{ width: "100%", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 6, padding: "4px 6px", color: T.text, fontSize: 10 }}>
+                        <option value="All">All</option>
+                        {CATS.map(c2 => <option key={c2}>{c2}</option>)}
+                      </select>
+                    </td>
+                    <td colSpan={6} />
                   </tr>
                 </thead>
                 <tbody>
@@ -732,6 +791,15 @@ function InvestmentsSheet() {
           {Object.keys(byCat).length === 0 && <div style={{ textAlign: "center", color: T.muted, padding: 40 }}>No investments yet</div>}
         </div>
       )}
+
+      {/* Floating bottom Add button */}
+      <div style={{ position: "fixed", bottom: 80, right: 20, zIndex: 150 }}>
+        <button onClick={openAdd} style={{
+          background: T.accent, color: "#000", border: "none", borderRadius: "50%",
+          width: 56, height: 56, fontSize: 28, fontWeight: 900, cursor: "pointer",
+          boxShadow: `0 4px 20px ${T.accent}66`, display: "flex", alignItems: "center", justifyContent: "center"
+        }}>+</button>
+      </div>
 
       {showForm && (
         <Modal title={editId ? "Edit Investment" : "New Investment"} onClose={() => setShowForm(false)}>
