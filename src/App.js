@@ -107,7 +107,8 @@ const inr = (n, short = false) => {
     if (abs >= 1e7) return sign + "₹" + (abs / 1e7).toFixed(2) + " Cr";
     if (abs >= 1e5) return sign + "₹" + (abs / 1e5).toFixed(1) + "L";
   }
-  return sign + "₹" + abs.toLocaleString("en-IN");
+  // Full amount — no rounding, up to 8 digits
+  return sign + "₹" + Math.floor(abs).toLocaleString("en-IN");
 };
 const pct = n => (n >= 0 ? "+" : "") + Number(n).toFixed(2) + "%";
 const yrs = (d1, d2) => {
@@ -596,14 +597,14 @@ function InvestmentsSheet() {
 
   const yearlyData = useMemo(() => {
     const m = {};
-    enriched.forEach(i => {
+    filtered.forEach(i => {
       const y = i.date ? new Date(i.date).getFullYear() : "?";
       if (!m[y]) m[y] = { year: String(y), invested: 0, projected: 0 };
       m[y].invested += +i.invested || 0;
       m[y].projected += +i.projected || 0;
     });
     return Object.values(m).sort((a, b) => a.year - b.year);
-  }, [enriched]);
+  }, [filtered]);
 
   const byProposer = useMemo(() => {
     const m = {};
@@ -645,15 +646,34 @@ function InvestmentsSheet() {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 }}>
-        <Card><Stat label="Invested" value={inr(totals.invested, true)} color={T.blue} /></Card>
-        <Card><Stat label="Projected" value={inr(totals.projected, true)} color={T.accent} /></Card>
+        <Card><Stat label="Invested" value={inr(totals.invested, true)} color={T.blue} sub={inr(totals.invested)} /></Card>
+        <Card><Stat label="Projected" value={inr(totals.projected, true)} color={T.accent} sub={inr(totals.projected)} /></Card>
         <Card><Stat label="Gain" value={inr(totals.projected - totals.invested, true)} color={T.gold}
           sub={totals.invested ? pct(((totals.projected - totals.invested) / totals.invested) * 100) : ""} /></Card>
       </div>
 
+      {/* Filter active indicator */}
+      {(fp !== "All" || fc !== "All" || nameSearch !== "") && (
+        <div style={{ background: T.accentDim, border: `1px solid ${T.accent}44`, borderRadius: 10, padding: "8px 14px", marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontSize: 11, color: T.accent, fontWeight: 700 }}>
+            🔍 Filter active — showing {filtered.length} of {enriched.length} investments
+            {fp !== "All" && ` · Proposer: ${fp}`}
+            {fc !== "All" && ` · Category: ${fc}`}
+            {nameSearch !== "" && ` · Search: "${nameSearch}"`}
+          </div>
+          <button onClick={() => { setFp("All"); setFc("All"); setNameSearch(""); }}
+            style={{ background: T.red+"22", color: T.red, border: "none", borderRadius: 6, padding: "3px 10px", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+            Clear ✕
+          </button>
+        </div>
+      )}
+
       {yearlyData.length > 0 && (
         <Card style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>Year-wise Investment vs Projected</div>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Year-wise Investment vs Projected</div>
+          <div style={{ fontSize: 10, color: T.muted, marginBottom: 12 }}>
+            {(fp !== "All" || fc !== "All" || nameSearch !== "") ? `Filtered: ${filtered.length} investments` : `All ${enriched.length} investments`}
+          </div>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={yearlyData} barGap={2}>
               <CartesianGrid strokeDasharray="3 3" stroke={T.border} vertical={false} />
@@ -746,10 +766,10 @@ function InvestmentsSheet() {
                       <td style={{ padding: "9px 6px", color: T.sub, fontSize: 11 }}>{i.accountNo || "—"}</td>
                       <td style={{ padding: "9px 6px", color: T.sub, whiteSpace: "nowrap" }}>{(i.proposer||"").split(" ")[0]}</td>
                       <td style={{ padding: "9px 6px" }}><span style={{ background: T.accentDim, color: T.accent, borderRadius: 6, padding: "2px 7px", fontSize: 10 }}>{i.category}</span></td>
-                      <td style={{ padding: "9px 6px", color: T.blue, fontWeight: 700 }}>{inr(i.invested, true)}</td>
+                      <td style={{ padding: "9px 6px", color: T.blue, fontWeight: 700 }}>{inr(i.invested)}</td>
                       <td style={{ padding: "9px 6px", color: T.sub }}>{i.rate}%</td>
                       <td style={{ padding: "9px 6px", color: i.matured ? T.red : T.sub, whiteSpace: "nowrap" }}>{fmtDate(i.maturityDate)}</td>
-                      <td style={{ padding: "9px 6px", color: T.accent, fontWeight: 700 }}>{inr(i.projected, true)}</td>
+                      <td style={{ padding: "9px 6px", color: T.accent, fontWeight: 700 }}>{inr(i.projected)}</td>
                       <td style={{ padding: "9px 6px", color: T.sub }}>{i.nominee || "—"}</td>
                       <td style={{ padding: "9px 6px" }}>
                         <div style={{ display: "flex", gap: 4 }}>
@@ -760,6 +780,23 @@ function InvestmentsSheet() {
                       </td>
                     </tr>
                   ))}
+                  {/* Totals row */}
+                  <tr style={{ borderTop: `2px solid ${T.accent}44`, background: T.surface, position: "sticky", bottom: 0 }}>
+                    <td style={{ padding: "10px 6px" }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: T.gold }}>TOTAL</div>
+                      <div style={{ fontSize: 9, color: T.muted }}>{filtered.length} investments</div>
+                    </td>
+                    <td /><td /><td />
+                    <td style={{ padding: "10px 6px", color: T.blue, fontWeight: 800, fontSize: 12 }}>{inr(totals.invested)}</td>
+                    <td />
+                    <td />
+                    <td style={{ padding: "10px 6px", color: T.accent, fontWeight: 800, fontSize: 12 }}>{inr(totals.projected)}</td>
+                    <td style={{ padding: "10px 6px" }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: T.gold }}>{inr(totals.projected - totals.invested)}</div>
+                      <div style={{ fontSize: 9, color: T.sub }}>{totals.invested ? "+" + (((totals.projected - totals.invested) / totals.invested) * 100).toFixed(1) + "%" : ""}</div>
+                    </td>
+                    <td />
+                  </tr>
                 </tbody>
               </table>
             </div>
