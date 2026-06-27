@@ -140,19 +140,25 @@ function PinLock({ onUnlock }) {
   const [error, setError] = useState("");
   const [shake, setShake] = useState(false);
   const [storedPin, setStoredPin] = useState(load("app_pin", "1234"));
+  const [pinReady, setPinReady] = useState(false);
 
-  // Load PIN from Firebase so PIN change syncs across all devices
+  // Always load PIN from Firebase first — ensures PIN change syncs across all devices
   useEffect(() => {
+    setPinReady(false);
     loadFromCloud("app_pin").then(cloudPin => {
       if (cloudPin && typeof cloudPin === "string" && cloudPin.length === 4) {
         setStoredPin(cloudPin);
         persist("app_pin", cloudPin);
       }
+      setPinReady(true);
+    }).catch(() => {
+      // If Firebase fails, fall back to local PIN
+      setPinReady(true);
     });
   }, []); // eslint-disable-line
 
   const handleKey = (digit) => {
-    if (pin.length >= 4) return;
+    if (!pinReady || pin.length >= 4) return;
     const newPin = pin + digit;
     setPin(newPin);
     if (newPin.length === 4) {
@@ -182,7 +188,14 @@ function PinLock({ onUnlock }) {
         </div>
       </div>
 
-      <div style={{ fontSize: 14, color: T.sub, marginBottom: 24, fontWeight: 600 }}>Enter PIN to continue</div>
+      {!pinReady && (
+        <div style={{ fontSize: 12, color: T.muted, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>⟳</span> Loading secure PIN...
+        </div>
+      )}
+      <div style={{ fontSize: 14, color: T.sub, marginBottom: 24, fontWeight: 600 }}>
+        {pinReady ? "Enter PIN to continue" : "Please wait..."}
+      </div>
 
       {/* PIN dots */}
       <div style={{ display: "flex", gap: 16, marginBottom: 16, animation: shake ? "shake 0.3s" : "none" }}>
@@ -221,7 +234,10 @@ function PinLock({ onUnlock }) {
         Change it in Settings after login
       </div>
 
-      <style>{`@keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-8px)} 75%{transform:translateX(8px)} }`}</style>
+      <style>{`
+        @keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-8px)} 75%{transform:translateX(8px)} }
+        @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+      `}</style>
     </div>
   );
 }
@@ -855,13 +871,16 @@ function SettingsSheet({ onLock }) {
   const [msg, setMsg] = useState("");
 
   const changePin = async () => {
-    const stored = load("app_pin", "1234");
-    if (oldPin !== stored) { setMsg("❌ Current PIN is incorrect"); return; }
-    if (newPin.length !== 4 || isNaN(newPin)) { setMsg("❌ New PIN must be 4 digits"); return; }
+    // Check against both local and cloud PIN
+    const localPin = load("app_pin", "1234");
+    const cloudPin = await loadFromCloud("app_pin");
+    const currentPin = (cloudPin && typeof cloudPin === "string" && cloudPin.length === 4) ? cloudPin : localPin;
+    if (oldPin !== currentPin) { setMsg("❌ Current PIN is incorrect"); return; }
+    if (!/^\d{4}$/.test(newPin)) { setMsg("❌ New PIN must be exactly 4 digits"); return; }
     if (newPin !== confirmPin) { setMsg("❌ PINs do not match"); return; }
-    // Save to both localStorage AND Firebase cloud
-    persist("app_pin", newPin);
+    // Save to Firebase first, then localStorage
     await saveToCloud("app_pin", newPin);
+    persist("app_pin", newPin);
     setMsg("✅ PIN changed on all devices!");
     setOldPin(""); setNewPin(""); setConfirmPin("");
     setTimeout(() => setMsg(""), 3000);
