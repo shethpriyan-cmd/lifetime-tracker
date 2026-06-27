@@ -32,6 +32,31 @@ const loadFromCloud = async (key) => {
   return null;
 };
 
+// ── PIN-SPECIFIC CLOUD HELPERS ────────────────────────────────────────────────
+// PIN is stored separately as a plain field to avoid JSON double-encoding issues
+const savePinToCloud = async (pin) => {
+  try {
+    await setDoc(doc(db, "tracker", "app_pin"), { pin: pin, updatedAt: new Date().toISOString() });
+  } catch (e) { console.log("PIN cloud save failed:", e); }
+};
+const loadPinFromCloud = async () => {
+  try {
+    const snap = await getDoc(doc(db, "tracker", "app_pin"));
+    if (snap.exists()) {
+      const d = snap.data();
+      // Support both old format (data field) and new format (pin field)
+      if (d.pin && typeof d.pin === "string" && d.pin.length === 4) return d.pin;
+      if (d.data) {
+        try {
+          const parsed = JSON.parse(d.data);
+          if (typeof parsed === "string" && parsed.length === 4) return parsed;
+        } catch {}
+      }
+    }
+  } catch (e) { console.log("PIN cloud load failed:", e); }
+  return null;
+};
+
 // ── LOCAL STORAGE ─────────────────────────────────────────────────────────────
 const load = (key, fallback) => {
   try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
@@ -145,14 +170,13 @@ function PinLock({ onUnlock }) {
   // Always load PIN from Firebase first — ensures PIN change syncs across all devices
   useEffect(() => {
     setPinReady(false);
-    loadFromCloud("app_pin").then(cloudPin => {
-      if (cloudPin && typeof cloudPin === "string" && cloudPin.length === 4) {
+    loadPinFromCloud().then(cloudPin => {
+      if (cloudPin) {
         setStoredPin(cloudPin);
         persist("app_pin", cloudPin);
       }
       setPinReady(true);
     }).catch(() => {
-      // If Firebase fails, fall back to local PIN
       setPinReady(true);
     });
   }, []); // eslint-disable-line
@@ -871,15 +895,15 @@ function SettingsSheet({ onLock }) {
   const [msg, setMsg] = useState("");
 
   const changePin = async () => {
-    // Check against both local and cloud PIN
+    // Always verify against cloud PIN first
+    const cloudPin = await loadPinFromCloud();
     const localPin = load("app_pin", "1234");
-    const cloudPin = await loadFromCloud("app_pin");
-    const currentPin = (cloudPin && typeof cloudPin === "string" && cloudPin.length === 4) ? cloudPin : localPin;
+    const currentPin = cloudPin || localPin;
     if (oldPin !== currentPin) { setMsg("❌ Current PIN is incorrect"); return; }
-    if (!/^\d{4}$/.test(newPin)) { setMsg("❌ New PIN must be exactly 4 digits"); return; }
+    if (newPin.length !== 4 || isNaN(Number(newPin))) { setMsg("❌ New PIN must be exactly 4 digits"); return; }
     if (newPin !== confirmPin) { setMsg("❌ PINs do not match"); return; }
-    // Save to Firebase first, then localStorage
-    await saveToCloud("app_pin", newPin);
+    // Save to Firebase with dedicated PIN function, then localStorage
+    await savePinToCloud(newPin);
     persist("app_pin", newPin);
     setMsg("✅ PIN changed on all devices!");
     setOldPin(""); setNewPin(""); setConfirmPin("");
