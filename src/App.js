@@ -94,8 +94,9 @@ const T = {
 };
 
 // ── CONSTANTS ─────────────────────────────────────────────────────────────────
-const CATS = ["Fixed Deposit","Life Insurance","PPF","ELSS","NPS","Bonds","Gold","Real Estate","Other"];
-const PROPOSERS = ["Priyan Sheth","Suhani Sheth","Kepin Sheth","Bhagvatiben Sheth","Punjilal Sheth"];
+const CATS = ["Fixed Deposit","Post SCSS","Post NSC","Sukanya Samridhi Yojana","LIC Jeevan Saral","LIC Jeevan Anand","Subh Nivesh (SBI Life)","HDFC Sanchay Plus","PPF","Bonds","Gold","Other"];
+const PROPOSERS = ["Kepin Sheth","Priyan Sheth","Suhani Sheth","Bhagvatiben Sheth","Punjilal Sheth"];
+const NOMINEES = ["Kepin Sheth","Priyan Sheth","Suhani Sheth","Bhagvatiben Sheth","Punjilal Sheth"];
 
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
@@ -113,11 +114,21 @@ const yrs = (d1, d2) => {
   if (!d1 || !d2) return 0;
   return Math.max(0, (new Date(d2) - new Date(d1)) / (1000 * 60 * 60 * 24 * 365.25));
 };
-const compound = (p, r, y) => p && r && y ? Math.round(p * Math.pow(1 + r / 100, y)) : 0;
+// Quarterly compound interest: A = P(1 + r/400)^(4*y)
+const compound = (p, r, y) => p && r && y ? Math.round(p * Math.pow(1 + r / 400, 4 * y)) : 0;
 const fyLabel = d => {
   if (!d) return "—";
   const dt = new Date(d), y = dt.getFullYear(), m = dt.getMonth();
   return m >= 3 ? `FY ${y}-${String(y+1).slice(2)}` : `FY ${y-1}-${String(y).slice(2)}`;
+};
+
+// ── DATE HELPERS ──────────────────────────────────────────────────────────────
+// Convert YYYY-MM-DD (input) to DD/MM/YYYY (display)
+const fmtDate = d => {
+  if (!d) return "—";
+  const parts = d.split("-");
+  if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
+  return d;
 };
 
 // ── SHARED UI ─────────────────────────────────────────────────────────────────
@@ -331,10 +342,210 @@ function useCloudData(key, defaultVal) {
   return [data, setData, syncStatus];
 }
 
+
+// ── PROPOSER DRILLDOWN COMPONENT ─────────────────────────────────────────────
+function ProposerDrilldown({ byProposer, inr, fmtDate }) {
+  const [expandedProposer, setExpandedProposer] = useState(null);
+  const [expandedItem, setExpandedItem] = useState(null);
+  const [expandedCat, setExpandedCat] = useState(null);
+
+  // Group items by category within each proposer
+  const groupByCat = (items) => {
+    const m = {};
+    items.forEach(i => {
+      const cat = i.category || "Other";
+      if (!m[cat]) m[cat] = { items: [], invested: 0, projected: 0 };
+      m[cat].items.push(i);
+      m[cat].invested += +i.invested || 0;
+      m[cat].projected += +i.projected || 0;
+    });
+    return m;
+  };
+
+  if (Object.keys(byProposer).length === 0) {
+    return <div style={{ textAlign: "center", color: T.muted, padding: 40 }}>No investments yet</div>;
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {Object.entries(byProposer).map(([name, d]) => {
+        const isExpanded = expandedProposer === name;
+        const catGroups = groupByCat(d.items);
+
+        return (
+          <div key={name} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden" }}>
+            {/* ── PROPOSER HEADER — always visible ── */}
+            <div onClick={() => { setExpandedProposer(isExpanded ? null : name); setExpandedCat(null); setExpandedItem(null); }}
+              style={{ padding: 16, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 14, color: T.text }}>{name}</div>
+                <div style={{ fontSize: 10, color: T.muted, marginTop: 2 }}>{d.items.length} investments · {Object.keys(catGroups).length} categories</div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: T.accent }}>{inr(d.projected, true)}</div>
+                  <div style={{ fontSize: 10, color: T.blue }}>from {inr(d.invested, true)}</div>
+                </div>
+                <div style={{ fontSize: 18, color: T.muted, transition: "transform 0.2s", transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)" }}>›</div>
+              </div>
+            </div>
+
+            {/* ── SUMMARY STRIP ── */}
+            {!isExpanded && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", borderTop: `1px solid ${T.border}` }}>
+                <div style={{ padding: "8px 16px", borderRight: `1px solid ${T.border}` }}>
+                  <div style={{ fontSize: 9, color: T.muted, textTransform: "uppercase", letterSpacing: 1 }}>Invested</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: T.blue }}>{inr(d.invested, true)}</div>
+                </div>
+                <div style={{ padding: "8px 16px", borderRight: `1px solid ${T.border}` }}>
+                  <div style={{ fontSize: 9, color: T.muted, textTransform: "uppercase", letterSpacing: 1 }}>Maturity</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: T.accent }}>{inr(d.projected, true)}</div>
+                </div>
+                <div style={{ padding: "8px 16px" }}>
+                  <div style={{ fontSize: 9, color: T.muted, textTransform: "uppercase", letterSpacing: 1 }}>Gain</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: T.gold }}>{inr(d.projected - d.invested, true)}</div>
+                </div>
+              </div>
+            )}
+
+            {/* ── EXPANDED: CATEGORY GROUPS ── */}
+            {isExpanded && (
+              <div style={{ borderTop: `1px solid ${T.border}` }}>
+                {/* Summary row */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", background: T.surface, borderBottom: `1px solid ${T.border}` }}>
+                  <div style={{ padding: "8px 16px", borderRight: `1px solid ${T.border}` }}>
+                    <div style={{ fontSize: 9, color: T.muted, textTransform: "uppercase", letterSpacing: 1 }}>Total Invested</div>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: T.blue }}>{inr(d.invested, true)}</div>
+                  </div>
+                  <div style={{ padding: "8px 16px", borderRight: `1px solid ${T.border}` }}>
+                    <div style={{ fontSize: 9, color: T.muted, textTransform: "uppercase", letterSpacing: 1 }}>Total Maturity</div>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: T.accent }}>{inr(d.projected, true)}</div>
+                  </div>
+                  <div style={{ padding: "8px 16px" }}>
+                    <div style={{ fontSize: 9, color: T.muted, textTransform: "uppercase", letterSpacing: 1 }}>Total Gain</div>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: T.gold }}>{inr(d.projected - d.invested, true)}</div>
+                  </div>
+                </div>
+
+                {/* Category groups */}
+                {Object.entries(catGroups).map(([cat, cdata]) => {
+                  const isCatExpanded = expandedCat === `${name}|${cat}`;
+                  return (
+                    <div key={cat} style={{ borderBottom: `1px solid ${T.border}` }}>
+                      {/* ── CATEGORY ROW ── */}
+                      <div onClick={() => setExpandedCat(isCatExpanded ? null : `${name}|${cat}`)}
+                        style={{ padding: "10px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", background: isCatExpanded ? T.accentDim : "transparent" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ fontSize: 14, transition: "transform 0.2s", display: "inline-block", transform: isCatExpanded ? "rotate(90deg)" : "rotate(0deg)", color: T.muted }}>›</span>
+                          <div>
+                            <span style={{ background: T.accentDim, color: T.accent, borderRadius: 6, padding: "2px 8px", fontSize: 10, fontWeight: 700 }}>{cat}</span>
+                            <span style={{ fontSize: 10, color: T.muted, marginLeft: 8 }}>{cdata.items.length} investment{cdata.items.length > 1 ? "s" : ""}</span>
+                          </div>
+                        </div>
+                        <div style={{ textAlign: "right" }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: T.accent }}>{inr(cdata.projected, true)}</div>
+                          <div style={{ fontSize: 10, color: T.blue }}>from {inr(cdata.invested, true)}</div>
+                        </div>
+                      </div>
+
+                      {/* ── INVESTMENT ITEMS in category ── */}
+                      {isCatExpanded && cdata.items.map(i => {
+                        const isItemExpanded = expandedItem === i.id;
+                        const gain = (+i.projected || 0) - (+i.invested || 0);
+                        const gainPct = i.invested > 0 ? ((gain / +i.invested) * 100).toFixed(1) : 0;
+
+                        return (
+                          <div key={i.id} style={{ borderTop: `1px solid ${T.border}22`, background: T.bg }}>
+                            {/* Item brief row */}
+                            <div onClick={() => setExpandedItem(isItemExpanded ? null : i.id)}
+                              style={{ padding: "10px 24px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <span style={{ fontSize: 12, color: T.muted, transition: "transform 0.2s", display: "inline-block", transform: isItemExpanded ? "rotate(90deg)" : "rotate(0deg)" }}>›</span>
+                                <div>
+                                  <div style={{ fontSize: 12, fontWeight: 700, color: T.text }}>{i.name}</div>
+                                  {i.accountNo && <div style={{ fontSize: 10, color: T.muted }}>A/C: {i.accountNo}</div>}
+                                </div>
+                              </div>
+                              <div style={{ textAlign: "right" }}>
+                                <div style={{ fontSize: 12, fontWeight: 700, color: T.accent }}>{inr(i.projected, true)}</div>
+                                <div style={{ fontSize: 10, color: gain >= 0 ? T.gold : T.red }}>+{gainPct}%</div>
+                              </div>
+                            </div>
+
+                            {/* Item full detail */}
+                            {isItemExpanded && (
+                              <div style={{ padding: "0 24px 14px 42px" }}>
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, background: T.card, borderRadius: 10, padding: 12 }}>
+                                  <div>
+                                    <div style={{ fontSize: 9, color: T.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 2 }}>Investment Amount</div>
+                                    <div style={{ fontSize: 13, fontWeight: 800, color: T.blue }}>{inr(i.invested)}</div>
+                                  </div>
+                                  <div>
+                                    <div style={{ fontSize: 9, color: T.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 2 }}>Maturity Amount</div>
+                                    <div style={{ fontSize: 13, fontWeight: 800, color: T.accent }}>{inr(i.projected)}</div>
+                                  </div>
+                                  <div>
+                                    <div style={{ fontSize: 9, color: T.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 2 }}>Investment Date</div>
+                                    <div style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{fmtDate(i.date)}</div>
+                                  </div>
+                                  <div>
+                                    <div style={{ fontSize: 9, color: T.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 2 }}>Maturity Date</div>
+                                    <div style={{ fontSize: 12, fontWeight: 600, color: i.matured ? T.red : T.text }}>{fmtDate(i.maturityDate)}{i.matured ? " ✓" : ""}</div>
+                                  </div>
+                                  <div>
+                                    <div style={{ fontSize: 9, color: T.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 2 }}>Gain</div>
+                                    <div style={{ fontSize: 13, fontWeight: 800, color: gain >= 0 ? T.gold : T.red }}>{inr(gain)} <span style={{ fontSize: 10 }}>({gainPct}%)</span></div>
+                                  </div>
+                                  <div>
+                                    <div style={{ fontSize: 9, color: T.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 2 }}>Interest Rate</div>
+                                    <div style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{i.rate}% (Qtrly)</div>
+                                  </div>
+                                  {i.nominee && (
+                                    <div>
+                                      <div style={{ fontSize: 9, color: T.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 2 }}>Nominee</div>
+                                      <div style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{i.nominee}</div>
+                                    </div>
+                                  )}
+                                  {i.accountNo && (
+                                    <div>
+                                      <div style={{ fontSize: 9, color: T.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 2 }}>Account No</div>
+                                      <div style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{i.accountNo}</div>
+                                    </div>
+                                  )}
+                                </div>
+                                {i.notes && (
+                                  <div style={{ marginTop: 8, background: T.surface, borderRadius: 8, padding: "10px 12px", border: `1px solid ${T.border}` }}>
+                                    <div style={{ fontSize: 9, color: T.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>📝 Notes</div>
+                                    <div style={{ fontSize: 12, color: T.text, lineHeight: 1.5 }}>{i.notes}</div>
+                                  </div>
+                                )}
+                                {i.attachment && (
+                                  <button onClick={() => window.open(i.attachment)}
+                                    style={{ marginTop: 8, background: T.blue+"22", color: T.blue, border: "none", borderRadius: 8, padding: "6px 14px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                                    📎 View Attachment
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SHEET 1 — INVESTMENTS
 // ─────────────────────────────────────────────────────────────────────────────
-const EMPTY_INV = { name: "", accountNo: "", date: "", rate: "", maturityDate: "", invested: "", maturityAmt: "", proposer: PROPOSERS[0], nominee: "", category: CATS[0] };
+const EMPTY_INV = { name: "", accountNo: "", date: "", rate: "", maturityDate: "", invested: "", maturityAmt: "", proposer: "Kepin Sheth", nominee: "Kepin Sheth", category: CATS[0], attachment: "", notes: "" };
 
 function InvestmentsSheet() {
   const [list, setList, syncStatus] = useCloudData("inv2", []);
@@ -470,18 +681,20 @@ function InvestmentsSheet() {
                     <tr key={i.id} style={{ borderBottom: `1px solid ${T.border}22`, background: i.matured ? T.red+"08" : "transparent" }}>
                       <td style={{ padding: "9px 6px" }}>
                         <div style={{ color: T.text, fontWeight: 600 }}>{i.name}</div>
-                        <div style={{ color: T.muted, fontSize: 10 }}>{i.fy}{i.matured ? " · MATURED" : ""}</div>
+                        <div style={{ color: T.muted, fontSize: 10 }}>{fmtDate(i.date)}{i.matured ? " · MATURED" : ""}</div>
+                        {i.notes && <div style={{ color: T.sub, fontSize: 10, fontStyle: "italic", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📝 {i.notes}</div>}
                       </td>
                       <td style={{ padding: "9px 6px", color: T.sub, fontSize: 11 }}>{i.accountNo || "—"}</td>
                       <td style={{ padding: "9px 6px", color: T.sub, whiteSpace: "nowrap" }}>{(i.proposer||"").split(" ")[0]}</td>
                       <td style={{ padding: "9px 6px" }}><span style={{ background: T.accentDim, color: T.accent, borderRadius: 6, padding: "2px 7px", fontSize: 10 }}>{i.category}</span></td>
                       <td style={{ padding: "9px 6px", color: T.blue, fontWeight: 700 }}>{inr(i.invested, true)}</td>
                       <td style={{ padding: "9px 6px", color: T.sub }}>{i.rate}%</td>
-                      <td style={{ padding: "9px 6px", color: i.matured ? T.red : T.sub, whiteSpace: "nowrap" }}>{i.maturityDate || "—"}</td>
+                      <td style={{ padding: "9px 6px", color: i.matured ? T.red : T.sub, whiteSpace: "nowrap" }}>{fmtDate(i.maturityDate)}</td>
                       <td style={{ padding: "9px 6px", color: T.accent, fontWeight: 700 }}>{inr(i.projected, true)}</td>
                       <td style={{ padding: "9px 6px", color: T.sub }}>{i.nominee || "—"}</td>
                       <td style={{ padding: "9px 6px" }}>
                         <div style={{ display: "flex", gap: 4 }}>
+                          {i.attachment && <Btn onClick={() => window.open(i.attachment)} v="ghost" style={{ padding: "3px 8px" }}>📎</Btn>}
                           <Btn onClick={() => openEdit(i)} v="ghost" style={{ padding: "3px 8px" }}>✎</Btn>
                           <Btn onClick={() => setList(list.filter(x => x.id !== i.id))} v="danger" style={{ padding: "3px 8px" }}>✕</Btn>
                         </div>
@@ -494,28 +707,7 @@ function InvestmentsSheet() {
       )}
 
       {view === "proposer" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {Object.entries(byProposer).map(([name, d]) => (
-            <Card key={name}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
-                <div style={{ fontWeight: 700 }}>{name}</div>
-                <span style={{ background: T.border, borderRadius: 20, padding: "2px 10px", fontSize: 10, color: T.sub }}>{d.items.length} investments</span>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
-                <div><Lbl>Invested</Lbl><div style={{ color: T.blue, fontWeight: 700 }}>{inr(d.invested, true)}</div></div>
-                <div><Lbl>Projected</Lbl><div style={{ color: T.accent, fontWeight: 700 }}>{inr(d.projected, true)}</div></div>
-                <div><Lbl>Gain</Lbl><div style={{ color: T.gold, fontWeight: 700 }}>{inr(d.projected - d.invested, true)}</div></div>
-              </div>
-              {d.items.map(i => (
-                <div key={i.id} style={{ display: "flex", justifyContent: "space-between", borderTop: `1px solid ${T.border}`, paddingTop: 6, marginTop: 6, fontSize: 12 }}>
-                  <span style={{ color: T.sub }}>{i.name}</span>
-                  <span style={{ color: T.accent }}>{inr(i.projected, true)}</span>
-                </div>
-              ))}
-            </Card>
-          ))}
-          {Object.keys(byProposer).length === 0 && <div style={{ textAlign: "center", color: T.muted, padding: 40 }}>No investments yet</div>}
-        </div>
+        <ProposerDrilldown byProposer={byProposer} inr={inr} fmtDate={fmtDate} />
       )}
 
       {view === "category" && (
@@ -553,10 +745,37 @@ function InvestmentsSheet() {
             <Field label="Amount Invested (₹)" type="number" value={form.invested} onChange={v => setForm({...form, invested: v})} />
             <Field label="Interest Rate (%)" type="number" value={form.rate} onChange={v => setForm({...form, rate: v})} />
             <Field label="Maturity Amount (0=auto)" type="number" value={form.maturityAmt} onChange={v => setForm({...form, maturityAmt: v})} />
-            <Field label="Nominee Name" value={form.nominee} onChange={v => setForm({...form, nominee: v})} />
           </div>
-          <Field label="Proposer" value={form.proposer} onChange={v => setForm({...form, proposer: v})} opts={PROPOSERS} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Field label="Proposer" value={form.proposer} onChange={v => setForm({...form, proposer: v})} opts={PROPOSERS} />
+            <Field label="Nominee" value={form.nominee} onChange={v => setForm({...form, nominee: v})} opts={NOMINEES} />
+          </div>
           <Field label="Category" value={form.category} onChange={v => setForm({...form, category: v})} opts={CATS} />
+          <div style={{ marginBottom: 10 }}>
+            <Lbl>Notes / Additional Details</Lbl>
+            <textarea value={form.notes} onChange={e => setForm({...form, notes: e.target.value})}
+              placeholder="Any additional notes about this investment..."
+              rows={3}
+              style={{ width: "100%", background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 10px", color: T.text, fontSize: 13, boxSizing: "border-box", resize: "vertical", fontFamily: "inherit" }} />
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            <Lbl>Attachment (scan copy)</Lbl>
+            <input type="file" accept="image/*,application/pdf"
+              onChange={e => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = ev => setForm({...form, attachment: ev.target.result});
+                reader.readAsDataURL(file);
+              }}
+              style={{ width: "100%", background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 10px", color: T.text, fontSize: 12, boxSizing: "border-box" }} />
+            {form.attachment && (
+              <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 11, color: T.accent }}>✓ Attachment added</span>
+                <button onClick={() => setForm({...form, attachment: ""})} style={{ background: T.red+"22", color: T.red, border: "none", borderRadius: 6, padding: "2px 8px", fontSize: 10, cursor: "pointer" }}>Remove</button>
+              </div>
+            )}
+          </div>
           {preview && (
             <div style={{ background: T.accentDim, border: `1px solid ${T.accent}33`, borderRadius: 10, padding: 12, marginBottom: 12 }}>
               <div style={{ fontSize: 11, color: T.accent }}>Projected Maturity</div>
@@ -962,7 +1181,7 @@ function SettingsSheet({ onLock }) {
 // SHEET 4 — MONTHLY SIPs
 // ─────────────────────────────────────────────────────────────────────────────
 const SIP_INTERVALS = ["Monthly","Weekly","Quarterly","Yearly"];
-const EMPTY_SIP = { name: "", sipAmt: "", lumpsumAmt: "", interval: "Monthly", date: "", sipWith: "", proposer: PROPOSERS[0], remarks: "" };
+const EMPTY_SIP = { name: "", sipAmt: "", lumpsumAmt: "", interval: "Monthly", date: "", sipWith: "", proposer: "Kepin Sheth", mfCategory: "", remarks: "" };
 
 function SIPSheet() {
   const [list, setList, syncStatus] = useCloudData("sip2", []);
@@ -970,10 +1189,24 @@ function SIPSheet() {
   const [editId, setEditId] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [filterProposer, setFilterProposer] = useState("All");
+  const [chartView, setChartView] = useState("monthly"); // monthly | yearly
 
   const filtered = useMemo(() =>
     filterProposer === "All" ? list : list.filter(s => s.proposer === filterProposer),
     [list, filterProposer]);
+
+  // Yearly chart data
+  const yearlyChart = useMemo(() => {
+    const m = {};
+    list.forEach(s => {
+      const yr = s.date ? s.date.slice(0, 4) : "Unknown";
+      if (!m[yr]) m[yr] = { year: yr, sip: 0, lumpsum: 0, total: 0 };
+      m[yr].sip += +s.sipAmt || 0;
+      m[yr].lumpsum += +s.lumpsumAmt || 0;
+      m[yr].total += (+s.sipAmt || 0) + (+s.lumpsumAmt || 0);
+    });
+    return Object.values(m).sort((a, b) => a.year.localeCompare(b.year));
+  }, [list]);
 
   // Monthly chart data — aggregate SIP + lumpsum by month
   const monthlyChart = useMemo(() => {
@@ -1030,12 +1263,20 @@ function SIPSheet() {
       {monthlyChart.length > 0 && (
         <>
           <Card style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Monthwise SIP Investment</div>
-            <div style={{ fontSize: 10, color: T.muted, marginBottom: 12 }}>SIP amount + Lumpsum per month</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>SIP Investment</div>
+                <div style={{ fontSize: 10, color: T.muted }}>SIP + Lumpsum total</div>
+              </div>
+              <div style={{ display: "flex", gap: 4 }}>
+                <button onClick={() => setChartView("monthly")} style={{ background: chartView === "monthly" ? T.accent : T.border, color: chartView === "monthly" ? "#000" : T.sub, border: "none", borderRadius: 6, padding: "4px 10px", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>Monthly</button>
+                <button onClick={() => setChartView("yearly")} style={{ background: chartView === "yearly" ? T.accent : T.border, color: chartView === "yearly" ? "#000" : T.sub, border: "none", borderRadius: 6, padding: "4px 10px", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>Yearly</button>
+              </div>
+            </div>
             <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={monthlyChart} barGap={2}>
+              <BarChart data={chartView === "monthly" ? monthlyChart : yearlyChart} barGap={2}>
                 <CartesianGrid strokeDasharray="3 3" stroke={T.border} vertical={false} />
-                <XAxis dataKey="month" tick={{ fill: T.sub, fontSize: 9 }} axisLine={false} tickLine={false} />
+                <XAxis dataKey={chartView === "monthly" ? "month" : "year"} tick={{ fill: T.sub, fontSize: 9 }} axisLine={false} tickLine={false} />
                 <YAxis tickFormatter={v => inr(v, true)} tick={{ fill: T.sub, fontSize: 10 }} axisLine={false} tickLine={false} />
                 <TT formatter={(v, n) => [inr(v), n === "sip" ? "SIP" : n === "lumpsum" ? "Lumpsum" : "Total"]} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -1104,7 +1345,7 @@ function SIPSheet() {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
               <thead>
                 <tr style={{ borderBottom: `1px solid ${T.border}` }}>
-                  {["Name","SIP With","Proposer","SIP Amt","Lumpsum","Interval","Date","Remarks",""].map(h => (
+                  {["Name","MF Category","SIP With","Proposer","SIP Amt","Lumpsum","Interval","Date","Remarks",""].map(h => (
                     <th key={h} style={{ textAlign: "left", padding: "8px 6px", color: T.muted, fontWeight: 600, fontSize: 9, whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
@@ -1113,6 +1354,7 @@ function SIPSheet() {
                 {filtered.map(s => (
                   <tr key={s.id} style={{ borderBottom: `1px solid ${T.border}22` }}>
                     <td style={{ padding: "9px 6px", color: T.text, fontWeight: 600 }}>{s.name}</td>
+                    <td style={{ padding: "9px 6px" }}>{s.mfCategory ? <span style={{ background: T.purple+"22", color: T.purple, borderRadius: 6, padding: "2px 7px", fontSize: 10 }}>{s.mfCategory}</span> : "—"}</td>
                     <td style={{ padding: "9px 6px", color: T.sub }}>{s.sipWith || "—"}</td>
                     <td style={{ padding: "9px 6px", color: T.sub }}>{(s.proposer||"").split(" ")[0]}</td>
                     <td style={{ padding: "9px 6px", color: T.accent, fontWeight: 700 }}>{inr(s.sipAmt, true)}</td>
@@ -1148,7 +1390,10 @@ function SIPSheet() {
             <Field label="SIP Interval" value={form.interval} onChange={v => setForm({...form, interval: v})} opts={SIP_INTERVALS} />
             <Field label="Date of SIP" type="date" value={form.date} onChange={v => setForm({...form, date: v})} />
           </div>
-          <Field label="Proposer" value={form.proposer} onChange={v => setForm({...form, proposer: v})} opts={PROPOSERS} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Field label="Proposer" value={form.proposer} onChange={v => setForm({...form, proposer: v})} opts={PROPOSERS} />
+            <Field label="MF Category" value={form.mfCategory} onChange={v => setForm({...form, mfCategory: v})} opts={["","Large Cap","Mid Cap","Small Cap","Flexi Cap","Multi Cap","ELSS","Debt","Hybrid","Index Fund","International","Sectoral"]} />
+          </div>
           <Field label="Remarks" value={form.remarks} onChange={v => setForm({...form, remarks: v})} />
           {(form.sipAmt > 0 || form.lumpsumAmt > 0) && (
             <div style={{ background: T.accentDim, border: `1px solid ${T.accent}33`, borderRadius: 10, padding: 12, marginBottom: 12 }}>
