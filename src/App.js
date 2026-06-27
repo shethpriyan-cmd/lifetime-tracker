@@ -51,7 +51,7 @@ const T = {
 // ── CONSTANTS ─────────────────────────────────────────────────────────────────
 const CATS = ["Fixed Deposit","Life Insurance","PPF","ELSS","NPS","Bonds","Gold","Real Estate","Other"];
 const PROPOSERS = ["Priyan Sheth","Suhani Sheth","Kepin Sheth","Bhagvatiben Sheth","Punjilal Sheth"];
-const CORRECT_PIN = load("app_pin", "1234");
+
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
 const inr = (n, short = false) => {
